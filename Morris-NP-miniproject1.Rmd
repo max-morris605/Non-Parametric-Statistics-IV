@@ -1,0 +1,311 @@
+---
+title: "Non-Parametric Statistics Mini Project"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1 Introduction {-}
+This project aims to assess whether the distribution of infant birth weights differs between babies born to smoking and non-smoking mothers. Rather than focusing solely on differences in mean birth weight, the analysis considers potential differences in distributional shape, spread, and tail behaviour.
+
+To address this question, kernel density estimation is used to obtain smooth estimates of the underlying distributions for the birth weights of both groups. These density estimates are then compared using a tail-weighted two-sample test statistic inspired by the Anderson–Darling framework. Since the null distribution of the test statistic is analytically intractable, statistical significance is assessed using a permutation test.
+
+The remainder of the report is structured as follows: Section 2 describes the data, Section 3 details the kernel density estimation methodology and bandwidth selection, Section 4 presents the two-sample test and results, and Section 5 concludes.
+
+# 2 The Data {-}
+The data used in this project was taken from the "birthwt" dataset from the "MASS" package in R. The dataset consists of a sample of 189 births in 1986 as part of a medical study from the Baystate Medical Center, Springfield. For each observation, several demographic and maternal variables are recorded alongside the birth weight of the child measured in grams.
+
+In the following analysis, the data is restricted to the infant birth weight ("bwt") variable, which has been converted to kilograms to improve interpretability without affecting the results of the inference. We have then split the data according to the "smoke" variable where $0$ indicates if the mother of the infant did **not** smoke during pregnancy and $1$ indicates if the mother did. 
+
+```{r, message = FALSE,warning=FALSE}
+require(MASS)
+data("birthwt")
+dim(birthwt)
+c(sum(is.na(birthwt$bwt)), sum(is.na(birthwt$smoke)))
+non.smoke <- birthwt$bwt[birthwt$smoke == 0]  / 1000
+smoke <- birthwt$bwt[birthwt$smoke == 1] / 1000
+c( length(non.smoke), length(smoke))
+summary(non.smoke)
+summary(smoke) 
+```
+Upon initial analysis, we can see that neither sample contains any missing values and the summary statistics indicate that babies born to smoking mothers tend to have lower birth weights on average, as well as lower medians and quartiles.
+```{r, fig.width = 6, fig.height = 2.5, fig.align = "center"}
+xgrid <- seq(0, 5, 0.05)
+xr <- range(xgrid)
+brks <- seq(xr[1], xr[2], by = 0.5)
+
+par(mfrow=c(1,2), mar=c(4,4,2,1), cex = 0.9)
+hist(non.smoke, breaks = brks, freq = FALSE, ylim = c(0, 0.7),
+     xlab = "Weight (kg)", main = "Birth Weights for Non-Smokers")
+hist(smoke, breaks = brks, freq = FALSE, ylim = c(0, 0.7),
+     xlab = "Weight (kg)", main = "Birth Weights for Smokers")
+```
+To gain an initial understanding of the distributional shapes, histograms for both groups are plotted using identical axes (chosen to span the data) and bin widths. Both distributions appear to be unimodal and there is an apparent difference in location and spread, noting that the distribution for smokers has a shift towards lower weights and a heavier left-tail.
+
+Since differences in birth weight distributions may occur beyond shifts in the mean, a full density-based comparison is required.
+
+# 3 Kernel Density Estimation (KDE) {-}
+In order to perform a meaningful comparison of the two distributions, smooth estimates of the underlying densities must be made for each sample. While histograms can provide a simple density estimator in which we can achieve $\mathcal{O}(n^{-2/3})$ convergence of the mean integrated square error (MISE), we can improve on this. Kernel Density Estimators (KDEs) offer an improved convergence rate ($\mathcal{O}(n^{-4/5})$) and provide a smoother estimate for the density making them more suitable for the purpose of this paper. 
+
+For this method, a suitable kernel function must be selected and in this section Gaussian, Epanechnikov and Uniform kernels are initially considered.
+```{r}
+est.density<- function(data, xgrid=data, h=0.5, kernel="gauss"){
+  my.kernel<- switch(kernel, 
+                     "gauss"= function(x){dnorm(x)},
+                     "epa"=function(x){x<- 3/4*(1-x^2)*ifelse(abs(x)<=1,1,0)},
+                     "uni"=function(x){x<- 1/2*ifelse(abs(x)<=1,1,0)}   
+  )
+  data<-na.omit(data)
+  n<-length(data)
+  g<-length(xgrid)
+  est<-rep(0, g)
+  denom<- n*h
+  for (j in 1:g){
+    num<- sum(my.kernel((data-xgrid[j])/h))
+    est[j]<- num/denom
+  }  
+  return(list(xgrid=xgrid, est=est)) 
+}
+```
+
+```{r, fig.width = 6, fig.height = 2.5, fig.align = "center"}
+
+gauss.kde.non.smoke <- est.density(non.smoke, xgrid, kernel = "gauss")
+epan.kde.non.smoke  <- est.density(non.smoke, xgrid, kernel = "epa")
+uni.kde.non.smoke <- est.density(non.smoke, xgrid, kernel = "uni")
+gauss.kde.smoke     <- est.density(smoke, xgrid, kernel = "gauss")
+epan.kde.smoke      <- est.density(smoke, xgrid, kernel = "epa")
+uni.kde.smoke <- est.density(smoke, xgrid, kernel = "uni")
+
+par(mfrow = c(1,2), mar = c(4,4,2,1), cex = 0.9)
+
+hist(non.smoke, breaks = brks, freq = FALSE,
+     xlim = range(xgrid), ylim = c(0, 0.6),
+     xlab = "Birth Weight (kg)", main = "Birth Weights: Non-smokers")
+lines(gauss.kde.non.smoke$xgrid, gauss.kde.non.smoke$est, lwd = 2, col = 3)
+lines(epan.kde.non.smoke$xgrid,  epan.kde.non.smoke$est,  lwd = 2, col = 2)
+lines(uni.kde.non.smoke$xgrid, uni.kde.non.smoke$est, lwd = 2, col = 4)
+legend("topleft", legend = c("Gaussian KDE", "Epanechnikov KDE", "Uniform KDE"),
+       col = c(3,2,4), lwd = 2, cex = 0.45, bty = "n")
+
+hist(smoke, breaks = brks, freq = FALSE,
+     xlim = range(xgrid), ylim = c(0, 0.6),
+     xlab = "Birth Weight (kg)", main = "Birth Weights: Smokers")
+lines(gauss.kde.smoke$xgrid, gauss.kde.smoke$est, lwd = 2, col = 3)
+lines(epan.kde.smoke$xgrid,  epan.kde.smoke$est,  lwd = 2, col = 2)
+lines(uni.kde.smoke$xgrid, uni.kde.smoke$est, lwd = 2, col = 4)
+legend("topleft", legend = c("Gaussian KDE", "Epanechnikov KDE", "Uniform KDE"),
+       col = c(3,2,4), lwd = 2, cex = 0.45, bty = "n")
+```
+The uniform kernel is included only for comparison, as its lack of smoothness results in inferior density estimates relative to the Gaussian and Epanechnikov kernels. Whilst the uniform kernel is theoretically valid, the discontinuous nature of the kernel makes it a poor estimator for modelling the birth weight densities.
+
+The Gaussian kernel produces the smoothest estimate due to a lighter sensitivity to individual observations and best captures the global structure of the samples. The Epanechnikov kernel shows an adequate amount of smoothing and, with correct bandwidth tuning, is able to produce estimates as smooth as the Gaussian estimator. The Epanechnikov kernel places greater emphasis on local features in the tails and near the modes, which can help to highlight extreme observations in the smokers sample. Nevertheless, the Gaussian kernel is preferred due to its smoother and more stable behaviour, with sensitivity to tail differences incorporated later through the test statistic.
+
+For convenience, going forward, the stats::density function shall be used to calculate the KDEs.
+
+## Optimal Bandwidth
+The bandwidth is our smoothing parameter and the choice of bandwidth plays a crucial role in KDE performance, as it controls the trade-off between bias and variance. Bandwidths that are too small result in overly rough density estimates, while overly large bandwidths neglect important features of the distribution.
+
+Two commonly used bandwidth selectors are considered: the rule-of-thumb bandwidth ($h_{\text{ROT}}$) and Silverman’s bandwidth ($h_{\text{sil}}$). Both are derived by minimising an asymptotic approximation to the MISE under normality assumptions.
+$$
+h_{\text{ROT}} = 1.06 \times \min\{s,\ \mathrm{IQR}/1.34\}\, \times  n^{-1/5} ,
+$$
+$$
+h_{\text{sil}} = 0.9 \times \min\{s,\ \mathrm{IQR}/1.34\}\, \times  n^{-1/5} ,
+$$
+$$
+\text{where }\, s = \frac{1}{n-1} \sum _{i=1}^n (x_i - \bar x)^2
+$$
+The two bandwidth selectors differ only in their constant factor, with Silverman’s rule producing a smaller bandwidth and hence slightly less smoothing.
+
+In addition to these traditional methods, a common way of tuning the bandwidth parameter is 'leave-one-out' (LOO) cross-validation (CV). LOO-CV selects the bandwidth by optimising out-of-sample predictive performance of the KDE and hence does not rely on distributional assumptions as in the derivation of the other bandwidths. 
+
+## Rule-of-Thumb methods
+```{r}
+h.rot<- function(data){
+  data<-na.omit(data)
+  n<-length(data)
+  sigma<-min(sd(data), IQR(data)/1.34)
+  hopt<- 1.06*sigma*n^(-1/5)
+  return(hopt)
+}
+
+h.sil<- function(data){
+  data<-na.omit(data)
+  n<-length(data)
+  sigma<-min(sd(data), IQR(data)/1.34)
+  hopt<- 0.9*sigma*n^(-1/5)
+  return(hopt)
+}
+```
+```{r}
+h.ROT.non.smoke <- h.rot(non.smoke)
+h.sil.non.smoke <- h.sil(non.smoke)
+c("Rule of Thumb Bandwidth" = h.ROT.non.smoke, "Silverman Bandwidth" = h.sil.non.smoke)
+```
+For the smokers sample, the values are:
+```{r}
+
+h.ROT.smoke <- h.rot(smoke)
+h.sil.smoke <- h.sil(smoke)
+c("Rule of Thumb Bandwidth" = h.ROT.smoke, "Silverman Bandwidth" = h.sil.smoke)
+```
+
+## Cross Validation approach for bandwidth selection
+We can extract the estimate from the "density" function by setting the "bw" parameter to "ucv":
+```{r, warning = FALSE}
+h.CV.non.smoke <- density(non.smoke, bw = "ucv")$bw
+h.CV.non.smoke
+```
+I shall now investigate the CV curve using the "locfit" package.
+```{r, message=FALSE, warning=FALSE, fig.width = 6, fig.height = 2.5, fig.align = "center"}
+require(locfit)
+h.grid<-seq(0.05,0.7, by = 0.005)
+h.length<-length(h.grid)
+non.smoke.lscv<- rep(0, h.length)
+for (j in 1:h.length){
+non.smoke.lscv[j]<- lscv.exact(non.smoke,h = 2.5 * h.grid[j])[1]
+}
+plot(h.grid, non.smoke.lscv, ylim = c(-0.38, -0.28), type = 'l', lwd = 2,
+     main = "CV curve for Non-Smokers Sample")
+abline(v = h.CV.non.smoke, col = 2, lwd = 1.5)
+abline(v = h.sil.non.smoke, col = 3, lwd = 1.5)
+legend("top", legend = c("CV bandwidth (minimum)", "Silverman Bandwidth"),
+       col = c(2,3), lwd = 1.5, bty = "n", cex = 0.6)
+```
+We can see here that the CV curve for the non-smoker sample is relatively flat around its minima and that the Silverman estimate of the bandwidth obtains a similar value, providing comparable smoothing.
+
+Now looking at the smokers sample:
+```{r, warning = FALSE}
+h.CV.smoke <- density(smoke, bw = "ucv")$bw
+h.CV.smoke
+```
+
+```{r, fig.width = 6, fig.height = 2.5, fig.align = "center"}
+smoke.lscv<- rep(0, h.length)
+for (j in 1:h.length){
+smoke.lscv[j]<- lscv.exact(smoke, h= 2.5 * h.grid[j])[1]
+}
+plot(h.grid, smoke.lscv, ylim = c(-0.45, -0.34), type = 'l', lwd = 2,
+     main = "CV curve for Smokers Sample")
+abline(v = h.CV.smoke, col = 2, lwd = 1.5)
+abline(v = h.sil.smoke, col = 3, lwd = 1.5)
+legend("top", legend = c("CV bandwidth (minimum)", "Silverman Bandwidth"),
+       col = c(2,3), lwd = 1.5, bty = "n", cex = 0.6)
+```
+Once again, the same phenomenon occurs for the smokers sample, with the minimum lying within a flat section of the curve.
+
+For both the smoking and non-smoking samples, the resulting bandwidth values are of similar magnitude. Silverman’s bandwidth is selected for the subsequent two-sample inference as it lies close to the CV minimum and is used more in common practice. 
+
+So for clarity, the Gaussian kernel with Silverman’s bandwidth is used for both groups, with bandwidths calculated separately for each sample to allow for differences in variability. This will allow for a comparable and consistent analysis.
+
+## Final Density Estimates
+```{r, fig.width = 6, fig.height = 2.5, fig.align = "center"}
+f.non.smoke <- density(non.smoke, bw = h.sil.non.smoke)
+f.smoke <- density(smoke, bw = h.sil.smoke)
+
+par(mfrow=c(1,1), mar=c(4,4,2,2), cex=0.9)
+plot(f.smoke, lwd = 2, col = 4, type = 'l', main = "KDE for Birth Weights",
+     xlab = "Weight (kg)")
+lines(f.non.smoke, lwd = 2, col = 2)
+legend("topleft", legend = c("KDE for smoker births", "KDE for non-smoker births"),
+       col = c(4,2), lwd = 2, cex = 0.8)
+```
+Having established clear differences in the estimated densities, a formal test is now required to assess whether these differences are statistically significant.
+
+# 4 Two-Sample Test {-}
+
+## Selection of Test Statistic
+In order to test the hypothesis: $H_0: F_{\text{non-smoke}} = F_{\text{smoke}} \ \text{vs} \ \ H_1: F_{\text{non-smoke}} \neq F_{\text{smoke}}$, where the null hypothesis states that the distribution of birth weights is the same for babies born to smoking and non-smoking mothers, I will discuss which test statistic is most suitable to the samples we have. 
+
+The Kolmogorov–Smirnov (KS) test looks for maximum discrepancy between the empirical distribution functions (EDF's) of the two samples. This is effective at capturing extreme changes in distributions, however this is not what is of interest in our context as we are focused on difference in shape, spread and tail behaviour.
+
+The Cramér–von Mises (CVM) test addresses this by integrating the squared difference between distributions, providing a more global comparison. An extension of this idea is the Anderson–Darling (AD) test, which applies a weight function to the integral, which is calculated using the EDF of the pooled data, adding more weight to the tails of the distributions. This is particularly relevant here, as differences in the lower tail of birth weights are of interest due to their association with adverse health outcomes.
+
+So as referenced earlier, to better capture the tail behaviour, an adjusted AD test to test our KDEs for the two samples will be implemented.
+$$
+A^2 = \frac{nm}{n+m} \int_{-\infty}^{\infty} \omega(z) \ \left (f_x(z) - f_y(z)\right)^2 \ dz,
+$$
+$$
+where \ \ \omega(z) = \frac{1}{F_{pool}(z) \left(1 - F_{pool}(z)\right)}
+$$
+To compute the adapted test statistic, we shall use our KDEs instead of the EDF and a discrete approximation is used to evaluate the integral as a sum over a common set of points spanning the support of both densities. This set of points $\{z_i\}_{i=1}^k$ are equally spaced such that $z_{min}$ and $z_{max}$ are extended to $\pm 3h_{\text{sil}}$ outside of the data range. This ensures that the full support of the densities is well represented by the estimates.
+$$
+A^2 \approx \frac{nm}{n+m}\ \delta \ \sum_{i=1}^{k}\omega(z_i)\left(f_x(z_i) - f_y(z_i)\right)^2, \ \ \ where \ \ \ \delta = \frac{k}{z_{max} - z_{min}}
+$$
+The test statistic used here adapts the Anderson–Darling framework by replacing empirical distribution functions with kernel density estimates, allowing smooth tail-sensitive comparison of continuous distributions.
+
+The KDE for the pooled data is also calculated and the CDF is approximated via R's in-built "cumsum" function so the weights are calculated in line with the theory and the methodology of this project.
+```{r}
+my.ad  <- function(x, y, h1, h2) {
+  n <- length(x) 
+  m <- length(y)
+  z <- c(x, y)
+  range <- range(z)
+  range[1] <- range[1] - 3 * max(h1, h2)
+  range[2] <- range[2] + 3 * max(h1, h2)
+  f1 <- density(x, from = range[1], to = range[2], bw = h1)
+  f2 <- density(y, from = range[1], to = range[2], bw = h2)
+  f.pool <- density(z, from = range[1], to = range[2])
+  dx <- (range[2] - range[1]) / length(f1$x) 
+  F.pool <- cumsum(f.pool$y) * dx
+  A <- (n * m / (n + m)) * dx * sum((1 / (F.pool * (1 - F.pool)) * (f1$y - f2$y)^2))
+  return(A)
+}
+```
+Which gives us an observed test statistic as follows:
+```{r}
+my.ad(non.smoke, smoke, h.sil.non.smoke, h.sil.smoke)
+```
+
+## Permutation Test
+Since we are unable to calculate the exact theoretical test statistic under the null distribution, we must use simulation to find the p-value of the observed test statistic. The permutation test utilises an assumption of exchangeability of observations via the null hypothesis. The statistical test therefore compares the observed test statistic with the simulated null distribution.
+
+To implement this procedure:
+
+1. The combined sample is randomly permuted at each iteration.
+2. The permuted sample is split into two samples of the original sizes.
+3. KDEs are recomputed for each sample using the same optimal bandwidths to ensure consistency.
+4. The test statistic is calculated for each permutation and are stored to form a simulated null distribution.
+5. The p-value is computed as the proportion of permuted test statistics that exceed the observed statistic.
+
+```{r}
+ad.perm <- function(x, y ,h1 ,h2 ,B=10000){
+  n <- length(x)
+  m <- length(y)
+  N <- n + m
+  z <- c(x,y)
+  A.obs <- my.ad(x, y, h1, h2)
+  
+  A.boot <- rep(0,B)
+  for(b in 1:B){
+    zstar <- sample(z, N, replace=FALSE)
+    xstar <- zstar[1:n]
+    ystar <- zstar[(n+1):(N)]
+    A.boot[b]<- my.ad(xstar, ystar, h1, h2)
+  }
+  pval <- mean(A.boot >= A.obs)
+  return(list(A.obs = A.obs, pvalue = pval))
+}
+
+ad.perm(non.smoke, smoke, h.sil.non.smoke, h.sil.smoke)
+```
+The resulting p-value gives evidence against the null hypothesis suggesting that there is a difference in the two distributions.
+
+While the test has been effective at detecting distributional and tail differences, its numerical value depends on the choice of bandwidth and kernel smoothing. Silverman’s rule provides stable and well-behaved density estimates in this analysis, however alternative bandwidth choices could produce slightly different values of the test statistic. Since our inference is based on a permutation procedure using the same smoothing choices throughout, the resulting p-value is relatively robust to these effects, hence justifying the use of a constant bandwidth.
+
+# 5 Conclusion {-}
+
+This project utilised non-parametric methods to investigate whether the distribution of birth weights differs between babies born to smoking mothers and non-smoking mothers. This analysis was carried out using kernel density estimators and a permutation-based two-sample test using an adjusted version of the Anderson-Darling test statistic.
+
+This procedure produced statistically significant results, providing evidence against the null hypothesis. This suggests maternal smoking during pregnancy is associated with changes in the distribution of birth weights of these children, particularly in the lower tail where adverse health conditions may be more likely.
+
+Since we have used a non-parametric approach, these conclusions have been made without the use of restrictive distributional assumptions (the assumptions involved in bandwidth optimisation do not concern the data directly). These results help to highlight the flexibility and interpretability of KDE-based inference in an applied setting.
+
+In future, it may be worth considering the use of an adaptive bandwidth within our permutation test. This would address the influence that the choice of our smoothing parameter has on test results and would help to consolidate this result. In addition, an alternative method to include the influence of distribution tails in our result is to estimate densities with the Epanechnikov kernel and to use an adapted Cramér-von Mises test statistic. This would also produce meaningful results without the need to approximate the pooled cumulative distribution function as we have done in the Anderson-Darling test. 
+
