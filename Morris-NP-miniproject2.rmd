@@ -1,0 +1,300 @@
+---
+title: "NP Epiphany Summative"
+output: pdf_document
+header-includes:
+  - \usepackage{float}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.pos = "H", out.width = "80%", 
+                      fig.align = "center")
+```
+
+# 1 Introduction 
+
+This project investigates how to estimate the derivative of a nonparametric regression function. By constructing bootstrap estimates and confidence intervals for the derivative, we can quantify the uncertainty in this estimate. Studying the derivative is useful because it reveals how the response changes with respect to the covariate, helping to identify underlying trends that may not be obvious from the regression curve alone.
+
+In this analysis, the primary method of analysis will involve fitting a local quadratic estimator to the chosen data-set, estimating the derivative of this fit and then applying a parametric bootstrap on the data to obtain a $95\%$ confidence interval for the estimate. In conjunction with my analysis, I will aim to understand the bandwidth sensitivity on the derivative estimate, assess the suitability of a local quadratic model in comparison to a local linear fit and I will also justify my reasoning for using a parametric bootstrap as opposed to other alternative methods.
+
+
+# 2 The Data 
+
+The ``airquality" dataset from the \{datasets\} package provides daily air quality measurements for 153 days in New York, May - September 1973. The response variable is the measurement of the mean \textit{ozone} (parts per billion) measured at Roosevelt Island between 13:00 and 15:00. The covariate considered in this project is the daily maximum temperature at La Guardia Airport, measured in degrees Fahrenheit. Since the airport is $\approx 4$miles away from Roosevelt Island it is a suitable measurement for analysis.
+
+Despite data being available for 153 days, the \textit{ozone} measurement for 37 of these days is missing with a summary of which observations are missing found in the appendix. To ensure the data for this project is complete, the days with missing \textit{ozone} measurements are removed.
+
+
+```{r, message=FALSE, warning=FALSE, fig.width=5, fig.height=4,fig.cap="Scatterplot of ozone concentration against temperature for complete cases in the airquality dataset."}
+data("airquality")
+aq <- na.omit(airquality[, c("Ozone", "Temp", "Wind")])
+source("Lecture_functions.R")
+set.seed(123)
+plot(aq$Temp, aq$Ozone, 
+     xlab = "Temperature (°F)", 
+     ylab = "Ozone (ppb)",
+     main = "Scatterplot of ozone against temperature",
+     pch = 19, cex = 0.6)
+```
+
+The scatter plot of ozone against temperature suggests a clear nonlinear association, making this data-set a suitable candidate for nonparametric regression. In particular, the relationship does not appear to be well described by a simple linear trend, with a visible increasing trend followed by an apparent dip at the high temperatures. It is therefore of interest to study how the rate of change of ozone varies with temperature. Estimating the derivative of the regression function allows us to examine where ozone concentration increases more rapidly, where this increase slows, and whether there is evidence of turning points in the relationship.
+
+Another feature of the scatterplot is the apparent increase in variability at higher temperatures. This is important for subsequent modelling choices, since it suggests that the variance may not be constant across the input space, and so a homoscedastic error assumption may be inappropriate.
+
+# 3 Local Polynomial Estimator and its Derivative
+
+The non-parametric regression model has the following form:
+
+\begin{equation}
+Y = m(x)+\sigma(x)\epsilon
+\end{equation}
+
+where $m(\cdot)$ denotes the unknown mean regression function, $\sigma(\cdot)$ is a variance function, and $\epsilon$ is a Gaussian error term with mean zero and unit variance. 
+
+In this project, $m(x)$ is estimated using local polynomial regression, with particular interest in estimating its first derivative $m'(x)$. We fit a polynomial of degree $p$
+locally around each point $x_0$ by minimising the weighted least squares criterion:
+
+\begin{equation}
+\sum_{i=1}^n \left( Y_i - \sum_{j=0}^p \beta_j (X_i - x_0)^j \right)^2 K_h(X_i - x_0)
+\end{equation}
+
+where $K_h$ is the kernel function with bandwidth $h$, taken to be the Gaussian kernel in this project due to its smoothing capabilities. From the lecture material it can be shown that the derivative $m'(x_0)$ can be found by evaluating the fitted coefficient $\hat{\beta}_1$. This straightforward approximation and approach for finding the derivative $m'(x)$ makes local polynomial regression a natural framework for our estimation.
+
+Both the local linear model ($p=1$) and the local quadratic model ($p=2$) provide flexible, low-bias estimators of the regression function, while also capturing its local structure. A key asymptotic property that makes local polynomial estimators attractive is that their bias is of order $O(h^2)$, while their variance is of order $O\!\left((nh)^{-1}\right)$ as our sample size increases.
+
+This is desirable because it reflects a favourable bias-variance trade-off: the bias decreases at rate $O(h^2)$, while the variance is of order $O((nh)^{-1})$. Hence, local polynomial estimators are able to capture nonlinear structure without introducing excessive variability, provided the bandwidth is chosen appropriately. Since the size of the \textit{airquality} data-set is fairly small, these asymptotic results should be interpreted with some caution, and it is therefore important to examine the sensitivity of the fitted curve and its derivative to the smoothing choice in practice.
+
+Although the local polynomial framework remains fixed, changing the bandwidth can materially affect both the fitted regression curve and, even more noticeably, its derivative. To assess this sensitivity in practice, the local quadratic estimator is plotted below for three bandwidth choices centred conservatively around the rule-of-thumb bandwidth $h_0  = \left[\frac{\nu_0 \, \tilde{\sigma}^2}{\mu_2^2 \sum_{i=1}^n \hat{m}''(x)^2}\right]^{1/5} n^{-1/5}$ obtained from the function \{dpill\}. 
+
+
+ 
+```{r, message=FALSE, warning=FALSE, fig.width=10, fig.height=5 , fig.cap="Local quadratic fits and corresponding derivative estimates under three bandwidth choices centred around the direct plug-in bandwidth. The fitted curves are relatively stable across bandwidths, whereas the derivative estimates show greater sensitivity to the smoothing level."}
+library(locpol)
+library(KernSmooth)
+xgrid <- seq(min(aq$Temp), max(aq$Temp), length.out = 200)
+h0 <- dpill(aq$Temp, aq$Ozone)
+hvals <- c(0.8*h0, h0, 1.2*h0)
+cols <- 2:4
+
+fits <- list()
+for (i in 1:3) {
+  fits[[i]] <- locpol(Ozone ~ Temp, deg = 2,
+                       xeval = xgrid, bw = hvals[i],
+                       data = aq, kernel = gaussK)
+}
+
+par(mfrow = c(1,2), mar = c(4,4,2,1))
+plot(aq$Temp, aq$Ozone,
+     xlab = "Temp", ylab = "Ozone",
+     pch = 16, cex = 0.6,
+     main = "Local polynomial fits")
+for (i in 1:3) {lines(fits[[i]]$lpFit[1:2], col = cols[i], lwd = 1.5)}
+legend("topleft",
+       legend = paste("bw =", round(hvals, 2)),
+       col = cols, lwd = 1.5, bty = "n")
+
+plot(0, 0, type = "n", xlim = range(xgrid), ylim = c(-13, 6),
+     xlab = "Temp", ylab = "Derivative", main = "Corresponding Derivatives")
+for (i in 1:3) {lines(fits[[i]]$lpFit[c(1,3)], col = cols[i], lwd = 1.5)}
+legend("bottomleft",
+       legend = paste("bw =", round(hvals, 2)),
+       col = cols, lwd = 1.5, bty = "n")
+```
+
+In this bandwidth sensitivity analysis, we can see that as we increase the bandwidth, the estimator is less sensitive to potential fluctuations in the data with both the lower bandwidth ($h=1.93$) and the ROT bandwidth ($h=2.41$) displaying erratic behaviour in the derivative estimate. Since we are primarily interested in producing an accurate estimate for the derivative with high confidence, the bandwidth of $h_{\text{deriv}}=1.2\times h_0=2.89$ will be used in the subsequent analysis. 
+
+It should also be noted that for this bandwidth analysis, we fixed the local polynomial fit to have degree $p=2$. Despite this, the selected bandwidth will be used to fit both the linear and quadratic models as, if we varied the bandwidth for each model, it might interfere with comparison of the model choice and this ensure that any differences in the derivative estimates are due solely to the choice of degree.
+
+A strong boundary effect is evident in the derivative estimates, especially near the upper end of the temperature range where the fitted curves show a sharp decline. From the scatterplot, this behaviour appears unlikely to reflect the true relationship and is more plausibly an artefact of boundary estimation. To avoid over-interpreting this region, subsequent derivative plots are truncated near the boundaries.
+
+This truncation does not change the fitted local polynomial estimator itself, but only the points at which it is evaluated and plotted. Hence, the use of a truncated grid affects presentation rather than estimation so that the inflated boundary effects don't affect the credibility of this analysis. Visual justification is given in the Appendix.
+
+
+```{r, message=FALSE, warning=FALSE, fig.width=10, fig.height=5, fig.cap="Comparison of local linear and local quadratic regression fits (left) and their corresponding derivative estimates (right). The fitted curves are broadly consistent across polynomial degree, whereas the derivative estimates show modest differences, especially near the boundary of the covariate range."}
+h_deriv <- 1.2*h0
+xgrid_full  <- seq(min(aq$Temp), max(aq$Temp), length.out = 200)
+xgrid_deriv <- seq(min(aq$Temp) + h_deriv, max(aq$Temp) - h_deriv, length.out = 200)
+fit_d1_full <- locpol(Ozone ~ Temp, deg = 1, xeval = xgrid_full,
+                 bw = h_deriv, data = aq, kernel = gaussK)
+fit_d2_full <- locpol(Ozone ~ Temp, deg = 2, xeval = xgrid_full,
+                 bw = h_deriv, data = aq, kernel = gaussK)
+fit_d1_deriv <- locpol(Ozone ~ Temp, deg = 1, xeval = xgrid_deriv,
+                 bw = h_deriv, data = aq, kernel = gaussK)
+fit_d2_deriv <- locpol(Ozone ~ Temp, deg = 2, xeval = xgrid_deriv,
+                 bw = h_deriv, data = aq, kernel = gaussK)
+
+par(mfrow = c(1,2))
+plot(aq$Temp, aq$Ozone,
+     xlab = "Temp", ylab = "Ozone",
+     pch = 16, cex = 0.6,
+     main = "Local polynomial fits")
+lines(fit_d1_full$lpFit[1:2], col = "steelblue", lwd = 1.5)
+lines(fit_d2_full$lpFit[1:2], col = "red", lwd = 1.5)
+legend("topleft", legend = c("Local linear", "Local quadratic"),
+       col = c("steelblue", "red"), lwd = 1.5, bty = "n")
+
+plot(0, 0, type = "n", xlim = range(xgrid_deriv), ylim = c(-8, 5),
+     xlab = "Temperature (°F)", ylab = "m'(x)",
+     main = "Deg 1 vs Deg 2 \n derivative estimate")
+lines(fit_d1_deriv$lpFit[c(1,3)], col = "steelblue", lwd = 1.5)
+lines(fit_d2_deriv$lpFit[c(1,3)], col = "red", lwd = 1.5)
+legend("bottomleft", legend = c("Local linear (deg=1)", "Local quadratic (deg=2)"),
+       col = c("steelblue", "red"), lwd = 1.5, bty = "n")
+```
+
+
+While the local linear derivative appears smoother near the upper boundary, this reflects the fact that degree 1 is less sensitive to boundary effects rather than providing a better estimate. The local linear derivative estimator is theoretically piecewise constant within each window, and whilst this may not be visually apparent at large bandwidths due to window overlap, it fails to capture the true local curvature of $m$. The local quadratic fit provides more sensitivity to the curvature of the data and enables trends otherwise hidden to local linear models to be discovered.
+
+The lecture notes also highlight that, theoretically, for estimation of the $j$-th derivative, odd values of $p-j$ are preferred. For first derivative estimation ($j=1$), this means that degree $p=2$, is optimal for estimation. The local linear estimator ($p=1$) gives $p-j=0$, which is even and therefore theoretically sub-optimal for derivative estimation, hence the local quadratic model will be used for subsequent analysis.
+
+
+# 4 Residual Diagnostics 
+Before proceeding to the bootstrap, we verify that a heteroscedastic variance model is appropriate. If the error variance were constant, squared residuals would show no systematic trend with temperature. Figure 4 plots the squared residuals against temperature with a nonparametric variance estimate overlaid. The clear increasing trend suggests the variance grows with temperature, justifying the use of a heteroscedastic model in the parametric bootstrap.
+
+To better understand the accuracy of the estimate of $m'(x)$ it is often desirable to increase the bandwidth for our smoothed estimate of the heteroscedastic variance function since squared residuals are much noisier than the original data. This does not have an effect on the bias or variance of our estimate and purely affects the smoothness of our confidence intervals. Using this justification, the bandwidth of our variance smoother is double the bandwidth used to construct our estimator.
+
+```{r, message=FALSE, warning=FALSE, fig.width=5, fig.height=4, fig.cap="Squared residuals against temperature with heteroscedastic variance estimate overlaid. The clear increasing trend supports the use of a non-constant variance model. The plot axes have been truncated to better display trend and 3 data points with residual square greater than 2500 are not present."}
+fitted <- approx(fit_d2_full$lpFit[, 1], fit_d2_full$lpFit[, 2],
+                 xout = aq$Temp)$y
+resid <- aq$Ozone - fitted
+var.het.fit <- my.sigma.smoother(aq$Temp, aq$Ozone, 
+                                  xgrid = aq$Temp, h = 2*h_deriv)$var.est
+plot(aq$Temp, resid^2, pch = 19, col = "steelblue", cex = 0.6,
+     xlab = "Temperature (°F)", ylab = "Squared residuals",
+     main = "Evidence of heteroscedasticity",
+     ylim = c(0, 2500))  # trim outliers from view
+lines(aq$Temp[order(aq$Temp)], 
+      var.het.fit[order(aq$Temp)], col = 2, lwd = 2)
+```
+
+# 5 Derivative Estimate and Uncertainty Quantification
+
+To quantify the uncertainty in the estimate of $m'(x)$, a 95% confidence interval is constructed. This provides a range of plausible values for the derivative at each point in the covariate space. To construct the confidence interval, repeated samples are generated from the fitted model and the derivative is re-estimated for each sample. The empirical distribution of these bootstrap derivative estimates is then used to obtain a confidence interval. 
+
+The typical method in which this can be done is using a non-parametric bootstrap which creates samples directly from the data and then creates this empirical distribution. However, due to the form of our model (equation 1), we can simply resample the residuals from the following distribution 
+
+\begin{equation}
+\epsilon_i \sim \mathcal{N}\left(0, \hat{\sigma}^2(x_i)\right)
+\end{equation}
+
+where we have used the heteroscedastic form of the residuals justified in the previous section. In practice, by using this parametric method of bootstrapping, we can produce more stable simulations and hence more stable confidence intervals.
+
+```{r, message=FALSE, warning=FALSE, fig.width=5, fig.height=4, fig.cap="Estimated derivative of ozone concentration with respect to temperature from the local quadratic fit (red), with 500 parametric bootstrap refits (grey) and pointwise 95% bootstrap confidence intervals (green). The bands indicate strongest evidence of a positive temperature effect roughly between \\(73^\\circ\\mathrm{F}\\) and \\(90^\\circ\\mathrm{F}\\)."}
+B <- 500
+G <- length(xgrid_deriv)
+Refit_deriv <- matrix(0, B, G)
+plot(0, 0, type = "n", xlim = range(xgrid_deriv), ylim = c(-10, 8),
+     xlab = "Temp", ylab = "Derivative")
+for (b in 1:B) {
+  yb <- fitted + sqrt(var.het.fit) * rnorm(length(fitted))
+  boot_df <- data.frame(Temp = aq$Temp, Ozone = yb)
+  Refit_deriv[b, ] <- locpol(Ozone ~ Temp, data = boot_df, deg = 2,
+                               xeval = xgrid_deriv, bw = h_deriv,
+                               kernel = gaussK)$lpFit[, 3]
+  lines(xgrid_deriv, Refit_deriv[b, ], col = "grey")
+}
+Quantiles <- matrix(0, 2, G)
+for (g in 1:G) {
+  Quantiles[1, g] <- quantile(Refit_deriv[, g], probs = 0.975)
+  Quantiles[2, g] <- quantile(Refit_deriv[, g], probs = 0.025)
+}
+lines(fit_d2_deriv$lpFit[, 1], fit_d2_deriv$lpFit[, 3], lwd = 2, col = 2)
+lines(xgrid_deriv, Quantiles[1, ], lwd = 2, col = 3)
+lines(xgrid_deriv, Quantiles[2, ], lwd = 2, col = 3)
+legend("bottomleft",
+       legend = c("LP est.", "refit", "bootstrap CI"),
+       lwd = c(2, 1, 2),
+       col = c(2, "grey", 3),
+       bty = "n")
+```
+
+The derivative estimate and bootstrap confidence intervals are displayed in Figure 5. The estimate of $m'(x)$ is positive throughout most of the temperature range, indicating that ozone concentration increases with temperature. The derivative is small and close to zero for temperatures below approximately 70$^\circ$F, suggesting little change in ozone at cooler temperatures. Above 70$^\circ$F the derivative increases substantially, reaching a peak near 87$^\circ$F of approximately 5 ppb/$^\circ$F, indicating that this is the region of most rapid ozone accumulation.
+
+The confidence intervals are relatively narrow in the central region (70$^\circ$F–87$^\circ$F), reflecting greater certainty in the derivative estimate where data is most dense and less scattered. The intervals widen noticeably below 65$^\circ$F and above 90$^\circ$F, consistent with the increased variability and reduced data coverage near the boundaries. We also observe that the lower confidence band is strictly positive for temperatures between approximately 73$^\circ$F and 90$^\circ$F, providing evidence that the positive association between temperature and ozone is statistically meaningful in this range.
+
+The sharp decline in $\hat{m}'(x)$ above 87$^\circ$F is of contextual interest as it may reflect a genuine reduction in the ozone-temperature relationship at extreme temperatures. This could potentially be due to other extreme weather events present such as extreme winds or measurement errors for extreme temperatures at La Guardia Airport. However, this region also coincides with sparser data and wider confidence intervals, and so this decline should be interpreted cautiously.
+
+
+
+# 6 Conclusion
+
+This project set out to estimate the derivative of a nonparametric regression function 
+relating ozone concentration to temperature, and to quantify the uncertainty in this 
+estimate via a parametric bootstrap. A local quadratic estimator was selected over the 
+local linear alternative on both theoretical grounds, since odd values of $p - j$ are 
+preferred for derivative estimation, and practical grounds, since the quadratic fit 
+demonstrated greater sensitivity to local curvature. The bandwidth was set at 
+$h = 1.2 \times h_0$, chosen to reduce erratic behaviour in the derivative estimate 
+whilst retaining sufficient local flexibility.
+
+The residual diagnostics provided clear evidence of heteroscedasticity, justifying the 
+use of a parametric bootstrap over the more standard nonparametric alternative. The 
+resulting 95% confidence intervals confirmed that the positive association between 
+temperature and ozone is statistically meaningful in the range $73^\circ$F to $90^\circ$F, 
+with the derivative peaking near $87^\circ$F at approximately 5 ppb/$^\circ$F. The 
+intervals widened noticeably near the boundaries, consistent with reduced data coverage 
+in those regions, and boundary truncation was applied to avoid over-interpreting artefacts 
+of the estimation procedure. Taken together, the analysis suggests that the rate of ozone 
+accumulation increases substantially with temperature across the summer months, with the 
+most rapid change occurring at higher temperatures.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+\newpage
+
+# Appendix
+
+## List of dates of missing measurements
+```{r}
+airquality[which(is.na(airquality$Ozone)),c(5,6)]
+```
+
+
+## Sanity check for the reduced grid.
+```{r}
+par(mfrow = c(1,1))
+plot(0, 0, type = "n", xlim = range(xgrid_full), ylim = c(-13, 6),
+     xlab = "Temperature (°F)", ylab = "m'(x)",
+     main = "Full vs trimmed grid derivative (should overlap)")
+
+# Full grid in red
+lines(fit_d2_full$lpFit[c(1,3)], col = "steelblue", lwd = 2)
+
+# Trimmed grid in blue dashed - should sit exactly on top of red in the middle
+lines(fit_d2_deriv$lpFit[c(1,3)], col = "black", lwd = 2, lty = 2)
+
+# Mark the trim boundaries
+abline(v = min(aq$Temp) + h_deriv, lty = 3, col = "red")
+abline(v = max(aq$Temp) - h_deriv, lty = 3, col = "red")
+
+legend("bottom", 
+       legend = c("Full grid", "Trimmed grid", "Trim boundary"),
+       col = c("steelblue", "black", "red"), 
+       lwd = c(2, 2, 1), lty = c(1, 2, 3), bty = "n")
+```
